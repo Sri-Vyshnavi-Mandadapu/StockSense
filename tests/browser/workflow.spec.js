@@ -1,0 +1,81 @@
+const {test,expect}=require('@playwright/test');
+test('manager completes stock flow, searches ledger, and uses mobile navigation',async({page})=>{
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('/');
+ await page.getByRole('button',{name:'Create an account',exact:true}).click();
+ await page.getByLabel('Full name').fill('Vyshnavi');
+ await page.getByLabel('Email address').fill('manager@example.com');
+ await page.getByLabel('Password',{exact:true}).fill('StockSense123!');
+ await page.getByRole('button',{name:'Create account →',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Inventory overview'})).toBeVisible();
+ await page.locator('[data-page="Settings"]').first().click();
+ await page.getByRole('button',{name:'＋ Add warehouse / location'}).click();
+ await page.getByLabel('New warehouse name').fill('Main Warehouse');
+ await page.getByLabel('Location / rack name').fill('Store');
+ await page.getByRole('button',{name:'Save',exact:true}).click();
+ await expect(page.getByRole('dialog')).not.toBeVisible();
+ await page.getByRole('button',{name:'＋ Add warehouse / location'}).click();
+ await page.locator('select[name="warehouse_id"]').selectOption({label:'Main Warehouse'});
+ await page.getByLabel('Location / rack name').fill('Production');
+ await page.getByRole('button',{name:'Save',exact:true}).click();
+ await expect(page.getByRole('dialog')).not.toBeVisible();
+ await page.locator('[data-page="Products"]').first().click();
+ await page.getByRole('button',{name:'＋ Add product'}).click();
+ await page.getByLabel('Product name').fill('Steel Rods');
+ await page.getByLabel('SKU / code').fill('STL-001');
+ await page.locator('input[name="category"]').fill('Raw Materials');
+ await page.getByLabel('Unit of measure').fill('kg');
+ await page.getByLabel('Reorder point').fill('15');
+ await page.getByRole('button',{name:'Save',exact:true}).click();
+ await expect(page.getByRole('dialog')).not.toBeVisible();
+ async function operation(nav,quantity,source,destination){
+   await page.locator(`[data-page="${nav}"]`).first().click();
+   await page.getByRole('button',{name:'＋ New operation'}).click();
+   if(source)await page.getByLabel('Source / counted location').selectOption({label:source});
+   if(destination)await page.getByLabel('Destination location').selectOption({label:destination});
+   await page.getByRole('dialog').getByLabel('Product',{exact:true}).selectOption({label:'STL-001 · Steel Rods (kg)'});
+   await page.getByLabel('Quantity',{exact:true}).fill(String(quantity));
+   await page.getByRole('button',{name:'Save',exact:true}).click();
+   await expect(page.getByRole('dialog')).not.toBeVisible();
+   await page.getByRole('button',{name:'View →'}).first().click();
+   await page.getByRole('button',{name:'Confirm → Waiting'}).click();
+   await page.getByRole('button',{name:'Mark ready',exact:true}).click();
+   if(nav==='Delivery Orders'){
+     await page.getByRole('button',{name:'Confirm picked'}).click();
+     await page.getByRole('button',{name:'Confirm packed'}).click();
+   }
+   await page.getByRole('button',{name:'Validate stock movement'}).click();
+   await expect(page.getByRole('dialog').locator('.badge.Done')).toBeVisible();
+   await page.getByRole('button',{name:'Close dialog'}).click();
+ }
+ await operation('Receipts',100,null,'Main Warehouse / Store');
+ await operation('Internal Transfers',100,'Main Warehouse / Store','Main Warehouse / Production');
+ await operation('Delivery Orders',20,'Main Warehouse / Production');
+ await operation('Inventory Adjustment',77,'Main Warehouse / Production');
+ await page.locator('[data-page="Products"]').first().click();
+ await expect(page.getByRole('cell',{name:'77 kg',exact:true})).toBeVisible();
+ await page.locator('[data-page="Move History"]').first().click();
+ await page.getByRole('searchbox').fill('STL-001');
+ await expect(page.locator('tbody tr')).toHaveCount(5);
+ await page.locator('[data-page="Dashboard"]').first().click();
+ await page.screenshot({path:'test-results/dashboard-desktop.png',fullPage:true});
+ await page.setViewportSize({width:390,height:844});
+ await page.screenshot({path:'test-results/dashboard-mobile.png',fullPage:true});
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();
+ await page.locator('[data-page="My Profile"]').first().click();
+ await page.getByRole('button',{name:'Log out',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Welcome back'})).toBeVisible();
+ expect(errors).toEqual([]);
+});
+
+test('API rejects unauthenticated writes and cross-origin form posts',async({request})=>{
+ const unauthorized=await request.post('/api/documents',{data:{},headers:{'X-StockSense':'1'}});
+ expect(unauthorized.status()).toBe(401);
+ const crossOrigin=await request.post('/api/signup',{form:{email:'attack@example.com'}});
+ expect(crossOrigin.status()).toBe(403);
+ const signup=await request.post('/api/signup',{data:{name:'Warehouse staff',email:'staff@example.com',password:'StaffPassword123!'},headers:{'X-StockSense':'1'}});
+ expect(signup.status()).toBe(200);
+ expect((await signup.json()).role).toBe('staff');
+ const forbidden=await request.post('/api/products',{data:{name:'Unauthorized product'},headers:{'X-StockSense':'1'}});
+ expect(forbidden.status()).toBe(403);
+});
